@@ -1,0 +1,100 @@
+{
+    "name": "cursor-cost-info",
+    "displayName": "Cursor 额度信息",
+    "description": "在状态栏显示 Cursor API 使用额度信息",
+    "version": "1.0.0",
+    "publisher": "Aggron Magic",
+    "repository": "https://github.com/aggronmagi/cursor_cost_info",
+    "engines": {
+        "vscode": "^1.80.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [
+        "onStartupFinished"
+    ],
+    "main": "./out/extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "cursor.costInfo.refresh",
+                "title": "刷新 Cursor 额度信息"
+            }
+        ],
+        "configuration": {
+            "title": "Cursor 额度信息",
+            "properties": {
+                "cursorCostInfo.cookie": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Cursor Cookie 值。从浏览器开发者工具中获取（访问 https://cursor.com/cn/dashboard?tab=usage，F12 -> Network -> usage-summary -> Request Headers -> Cookie）"
+                },
+                "cursorCostInfo.refreshInterval": {
+                    "type": "number",
+                    "default": 60000,
+                    "description": "自动刷新间隔（毫秒），默认 1 分钟"
+                },
+                "cursorCostInfo.onDemandLimit": {
+                    "type": "number",
+                    "default": null,
+                    "description": "自定义按需使用（onDemand）限额（美元）。如果未设置，将使用 API 返回的 limit 值。实际使用 = plan.used + onDemand.used，总限额 = plan.limit + onDemandLimit"
+                },
+                "cursorCostInfo.showProgressBar": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "是否在状态栏显示进度条，默认 true"
+                },
+                "cursorCostInfo.showWebView": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "是否显示始终可见的 WebView 面板，默认 false"
+                },
+                "cursorCostInfo.enableNotifications": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "是否启用使用率通知，默认 true"
+                },
+                "cursorCostInfo.notificationThresholds": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    },
+                    "default": [
+                        80,
+                        85,
+                        90,
+                        91,
+                        92,
+                        93,
+                        94,
+                        95,
+                        96,
+                        97,
+                        98,
+                        99,
+                        100
+                    ],
+                    "description": "发送通知的使用率百分比阈值列表。当使用率达到这些阈值时会发送通知。默认: [80, 85, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]"
+                }
+            }
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "pretest": "npm run compile",
+        "lint": "eslint src --ext ts",
+        "package": "vsce package"
+    },
+    "devDependencies": {
+        "@types/node": "^18.0.0",
+        "@types/vscode": "^1.80.0",
+        "@typescript-eslint/eslint-plugin": "^6.0.0",
+        "@typescript-eslint/parser": "^6.0.0",
+        "eslint": "^8.45.0",
+        "typescript": "^5.1.0"
+    },
+    "dependencies": {}
+}
