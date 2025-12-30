@@ -154,8 +154,10 @@ export function calculateTotalUsage(summary: UsageSummary, customOnDemandLimit: 
     const onDemand = summary.individualUsage.onDemand;
 
     // 使用自定义限制或 API 返回的限制
+    // 注意：customOnDemandLimit 是用户配置的美元值，需要转换为美分（乘以 100）
+    // API 返回的 onDemand.limit 已经是美分单位
     const onDemandLimit = customOnDemandLimit !== null
-        ? customOnDemandLimit
+        ? customOnDemandLimit * 100  // 美元转换为美分
         : (onDemand.limit !== null ? onDemand.limit : 0);
 
     const totalUsed = plan.used + onDemand.used;
