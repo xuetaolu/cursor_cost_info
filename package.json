@@ -2,7 +2,7 @@
     "name": "cursor-cost-info",
     "displayName": "Cursor 额度信息",
     "description": "在状态栏显示 Cursor API 使用额度信息",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "publisher": "Aggron Magic",
     "repository": "https://github.com/aggronmagi/cursor_cost_info",
     "engines": {
