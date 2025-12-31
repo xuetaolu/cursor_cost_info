@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { readCursorCookie, validateCookie, getConfigHelpText } from './config';
-import { fetchUsageSummary, formatUsageDisplay, UsageSummary, calculateTotalUsage, formatCurrency, getUsageColor } from './api';
+import { fetchUsageSummary, formatUsageDisplay, UsageSummary, calculateTotalUsage, formatCurrency, getUsageColor, fetchAllUsageEvents, calculateActualCost, formatActualCost, fetchMe, fetchTeams } from './api';
 
 let statusBarItem: vscode.StatusBarItem;
 let refreshTimer: NodeJS.Timeout | undefined;
@@ -8,12 +8,33 @@ let webViewPanel: vscode.WebviewPanel | undefined;
 let currentSummary: UsageSummary | undefined;
 let currentCustomOnDemandLimit: number | null = null;
 let lastNotificationPercentage: number | null = null; // 记录上次发送通知的百分比
+let lastActualCost: number | null = null; // 上次成功获取的实际成本
+let actualCostError: boolean = false; // 实际成本是否获取失败
+let outputChannel: vscode.OutputChannel; // 日志输出通道
+
+// 缓存的用户ID和团队ID（只在插件启动或cookie变化时重新获取）
+let cachedUserId: string | null = null;
+let cachedTeamId: string | null = null;
+let cachedCookie: string | null = null; // 用于检测cookie是否变化
+
+/**
+ * 日志输出函数
+ */
+function log(message: string) {
+  const timestamp = new Date().toLocaleTimeString('zh-CN');
+  outputChannel.appendLine(`[${timestamp}] ${message}`);
+  console.log(`[Cursor Cost Info] ${message}`);
+}
 
 /**
  * 扩展激活时调用
  */
 export function activate(context: vscode.ExtensionContext) {
-  console.log('Cursor 额度信息扩展已激活');
+  // 创建输出通道
+  outputChannel = vscode.window.createOutputChannel('Cursor Cost Info');
+  context.subscriptions.push(outputChannel);
+
+  log('Cursor 额度信息扩展已激活');
 
   // 创建状态栏项
   statusBarItem = vscode.window.createStatusBarItem(
@@ -113,6 +134,8 @@ function setupAutoRefresh(context: vscode.ExtensionContext) {
  */
 async function updateUsageInfo() {
   try {
+    log('开始更新使用情况信息...');
+
     // 显示加载状态
     statusBarItem.text = '$(sync~spin) 加载中...';
     statusBarItem.show();
@@ -121,6 +144,7 @@ async function updateUsageInfo() {
     const cookie = readCursorCookie();
 
     if (!cookie || !validateCookie(cookie)) {
+      log('Cookie 未配置或无效');
       statusBarItem.text = '$(warning) Cursor: 未配置 Cookie';
       statusBarItem.tooltip = getConfigHelpText();
       statusBarItem.color = undefined; // 使用默认颜色
@@ -141,8 +165,11 @@ async function updateUsageInfo() {
       return;
     }
 
-    // 调用 API
+    log('Cookie 有效，开始请求 UsageSummary API...');
+
+    // 调用 API 获取使用情况摘要
     const summary = await fetchUsageSummary(cookie);
+    log(`UsageSummary 获取成功: billingCycleStart=${summary.billingCycleStart}`);
 
     // 获取配置
     const config = vscode.workspace.getConfiguration('cursorCostInfo');
@@ -155,9 +182,64 @@ async function updateUsageInfo() {
 
     // 计算总使用情况
     const total = calculateTotalUsage(summary, customOnDemandLimit);
+    log(`总使用情况: 已用=${total.totalUsed}, 限额=${total.totalLimit}, 百分比=${total.percentage}%`);
+
+    // 尝试获取实际成本
+    let actualCostText = '';
+    try {
+      // 检查 cookie 是否变化，如果变化则清除缓存
+      if (cachedCookie !== cookie) {
+        log('Cookie 已变化，清除缓存的 userId 和 teamId');
+        cachedUserId = null;
+        cachedTeamId = null;
+        cachedCookie = cookie;
+      }
+
+      // 如果没有缓存，则获取 userId 和 teamId
+      if (!cachedUserId || !cachedTeamId) {
+        log('开始获取用户信息和团队信息...');
+
+        // 并行获取 userId 和 teamId
+        const [meResponse, teamsResponse] = await Promise.all([
+          fetchMe(cookie),
+          fetchTeams(cookie)
+        ]);
+
+        cachedUserId = meResponse.id.toString();
+        log(`获取到 userId: ${cachedUserId}`);
+
+        if (teamsResponse.teams && teamsResponse.teams.length > 0) {
+          cachedTeamId = teamsResponse.teams[0].id.toString();
+          log(`获取到 teamId: ${cachedTeamId}`);
+        } else {
+          log('未找到团队信息，跳过获取实际成本');
+        }
+      }
+
+      if (cachedTeamId && cachedUserId) {
+        log(`开始请求详细使用事件 API... (teamId=${cachedTeamId}, userId=${cachedUserId})`);
+        const events = await fetchAllUsageEvents(cookie, cachedTeamId, cachedUserId, summary.billingCycleStart);
+        log(`详细使用事件获取成功: 共 ${events.length} 条事件`);
+
+        const actualCost = calculateActualCost(events, summary.billingCycleStart);
+        log(`实际成本计算完成: $${actualCost.toFixed(2)}`);
+
+        lastActualCost = actualCost;
+        actualCostError = false;
+        actualCostText = ` (实际 ${formatActualCost(actualCost)})`;
+      }
+    } catch (error) {
+      log(`获取实际成本失败: ${error instanceof Error ? error.message : String(error)}`);
+      actualCostError = true;
+      // 如果有上次成功获取的值，显示带问号
+      if (lastActualCost !== null) {
+        actualCostText = ` (实际 ${formatActualCost(lastActualCost)}?)`;
+      }
+    }
 
     // 更新状态栏显示
-    const displayText = formatUsageDisplay(summary, customOnDemandLimit, showProgressBar);
+    const displayText = formatUsageDisplay(summary, customOnDemandLimit, showProgressBar) + actualCostText;
+    log(`状态栏更新: ${displayText}`);
     statusBarItem.text = displayText;
 
     // 设置颜色
@@ -173,11 +255,11 @@ async function updateUsageInfo() {
       statusBarItem.backgroundColor = undefined;
     }
 
-    statusBarItem.tooltip = getDetailedTooltip(summary, customOnDemandLimit);
+    statusBarItem.tooltip = getDetailedTooltip(summary, customOnDemandLimit, lastActualCost, actualCostError);
     statusBarItem.show();
 
     // 更新 WebView
-    updateWebView(summary, customOnDemandLimit);
+    updateWebView(summary, customOnDemandLimit, undefined, lastActualCost, actualCostError);
 
     // 检查并发送通知
     checkAndSendNotification(total.percentage, total.totalUsed, total.totalLimit);
@@ -262,7 +344,7 @@ function createWebViewPanel(context: vscode.ExtensionContext) {
 /**
  * 更新 WebView 内容
  */
-function updateWebView(summary: UsageSummary | null | undefined, customOnDemandLimit: number | null, error?: string) {
+function updateWebView(summary: UsageSummary | null | undefined, customOnDemandLimit: number | null, error?: string, actualCost?: number | null, actualCostError?: boolean) {
   if (!webViewPanel) {
     return;
   }
@@ -275,7 +357,7 @@ function updateWebView(summary: UsageSummary | null | undefined, customOnDemandL
     html = getNoConfigWebViewHtml();
   } else {
     const total = calculateTotalUsage(summary, customOnDemandLimit);
-    html = getUsageWebViewHtml(summary, total, customOnDemandLimit);
+    html = getUsageWebViewHtml(summary, total, customOnDemandLimit, actualCost, actualCostError);
   }
 
   webViewPanel.webview.html = html;
@@ -284,11 +366,25 @@ function updateWebView(summary: UsageSummary | null | undefined, customOnDemandL
 /**
  * 生成使用情况的 WebView HTML
  */
-function getUsageWebViewHtml(summary: UsageSummary, total: any, customOnDemandLimit: number | null): string {
+function getUsageWebViewHtml(summary: UsageSummary, total: any, customOnDemandLimit: number | null, actualCost?: number | null, actualCostError?: boolean): string {
   const plan = summary.individualUsage.plan;
   const onDemand = summary.individualUsage.onDemand;
   const color = getUsageColor(total.percentage);
   const progressBar = '█'.repeat(Math.round((total.percentage / 100) * 20)) + '░'.repeat(20 - Math.round((total.percentage / 100) * 20));
+
+  // 生成实际成本的 HTML
+  let actualCostHtml = '';
+  if (actualCost !== null && actualCost !== undefined) {
+    actualCostHtml = `
+    <div class="section">
+        <div class="section-title">📊 实际成本 (详细日志)</div>
+        <div class="detail-row">
+            <span class="detail-label">实际用量</span>
+            <span class="detail-value">${formatActualCost(actualCost)}${actualCostError ? ' (?)' : ''}</span>
+        </div>
+        ${actualCostError ? '<div class="detail-row"><span class="detail-label" style="color: var(--vscode-errorForeground);">获取最新数据失败，显示上次结果</span></div>' : ''}
+    </div>`;
+  }
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -433,6 +529,8 @@ function getUsageWebViewHtml(summary: UsageSummary, total: any, customOnDemandLi
             </div>
         </div>
     </div>
+
+    ${actualCostHtml}
 
     <div class="section">
         <div class="section-title">📋 计划使用 (Plan)</div>
@@ -627,7 +725,7 @@ function getErrorWebViewHtml(error: string): string {
 /**
  * 生成详细的工具提示信息
  */
-function getDetailedTooltip(summary: UsageSummary, customOnDemandLimit: number | null = null): string {
+function getDetailedTooltip(summary: UsageSummary, customOnDemandLimit: number | null = null, actualCost: number | null = null, actualCostError: boolean = false): string {
   const plan = summary.individualUsage.plan;
   const onDemand = summary.individualUsage.onDemand;
   const total = calculateTotalUsage(summary, customOnDemandLimit);
@@ -644,6 +742,19 @@ function getDetailedTooltip(summary: UsageSummary, customOnDemandLimit: number |
     `限额: ${formatCurrency(total.totalLimit)}`,
     `剩余: ${formatCurrency(total.totalRemaining)}`,
     `百分比: ${total.percentage}%`,
+  ];
+
+  // 添加实际成本信息
+  if (actualCost !== null) {
+    lines.push('');
+    lines.push('--- 实际成本 (详细日志) ---');
+    lines.push(`实际用量: ${formatActualCost(actualCost)}${actualCostError ? ' (?)' : ''}`);
+    if (actualCostError) {
+      lines.push('(获取最新数据失败，显示上次结果)');
+    }
+  }
+
+  lines.push(
     '',
     '--- 计划使用 (Plan) ---',
     `已用: ${formatCurrency(plan.used)}`,
@@ -669,7 +780,7 @@ function getDetailedTooltip(summary: UsageSummary, customOnDemandLimit: number |
     `结束: ${new Date(summary.billingCycleEnd).toLocaleString('zh-CN')}`,
     '',
     '💡 点击刷新数据'
-  ];
+  );
 
   return lines.join('\n');
 }

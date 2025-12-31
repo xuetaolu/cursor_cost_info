@@ -4,4 +4,8 @@ out
 .vscode-test
 .DS_Store
 *.md
-
+cursor_usage
+fetch_usage_events_detail
+.claude
+test
+cookies
