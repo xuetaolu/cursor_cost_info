@@ -456,8 +456,11 @@ export async function fetchAllUsageEvents(
 
     do {
         const response = await fetchUsageEvents(cookie, teamId, userId, startDate, endDate, page, pageSize);
-        allEvents.push(...response.usageEventsDisplay);
-        totalCount = response.totalUsageEventsCount;
+        // 当使用周期重置后没有任何使用记录时，usageEventsDisplay 可能是 undefined
+        if (response.usageEventsDisplay && response.usageEventsDisplay.length > 0) {
+            allEvents.push(...response.usageEventsDisplay);
+        }
+        totalCount = response.totalUsageEventsCount || 0;
         page++;
     } while (allEvents.length < totalCount);
 
